@@ -114,9 +114,9 @@ type User struct {
 	// JumioFinishedTime = Time user completed flow in Jumio
 	JumioFinishedTime uint64
 	// JumioVerified = user was verified from Jumio flow
-	JumioVerified    bool
+	JumioVerified bool
 	// JumioReturned = jumio webhook called
-	JumioReturned    bool
+	JumioReturned bool
 
 	// Is this user an admin
 	IsAdmin bool
@@ -156,22 +156,6 @@ type BalanceEntryResponse struct {
 	NetBalanceInMempool int64
 
 	ProfileEntryResponse *ProfileEntryResponse `json:",omitempty"`
-}
-
-func (fes *APIServer) GetBalanceForPublicKey(publicKeyBytes []byte) (
-	_balanceNanos uint64, _err error) {
-
-	// Get the UtxoEntries from the augmented view
-	utxoEntries, err := fes.blockchain.GetSpendableUtxosForPublicKey(publicKeyBytes, fes.backendServer.GetMempool(), nil)
-	if err != nil {
-		return 0, fmt.Errorf(
-			"GetBalanceForPublicKey: Problem getting utxos from view: %v", err)
-	}
-	totalBalanceNanos := uint64(0)
-	for _, utxoEntry := range utxoEntries {
-		totalBalanceNanos += utxoEntry.AmountNanos
-	}
-	return totalBalanceNanos, nil
 }
 
 // GetVerifiedUsernameToPKIDMapFromGlobalState
