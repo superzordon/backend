@@ -183,7 +183,7 @@ func LoadConfig(coreConfig *coreCmd.Config) *Config {
 	config.CloudflareStreamToken = viper.GetString("cloudflare-stream-token")
 	config.CloudflareAccountId = viper.GetString("cloudflare-account-id")
 
-	config.LivepeerToken = "98400a03-737a-4ba7-9031-cf46041ff6af"
+	config.LivepeerToken = viper.GetString("livepeer-token")
 
 	// Global State
 	config.ExposeGlobalState = viper.GetBool("expose-global-state")
