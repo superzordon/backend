@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"github.com/gorilla/mux"
 	"io"
+	"io/ioutil"
 	"net/http"
-	"strconv"
 	"strings"
 
 	// We import this so that we can decode gifs.
@@ -289,41 +289,72 @@ func (fes *APIServer) GetFullTikTokURL(ww http.ResponseWriter, req *http.Request
 	}
 }
 
+type LivepeerAsset struct {
+	ID         string `json:"id"`
+	PlaybackID string `json:"playbackId"`
+	UserID     string `json:"userId"`
+	CreatedAt  int64  `json:"createdAt"`
+	Status     struct {
+		Phase     string `json:"phase"`
+		UpdatedAt int64  `json:"updatedAt"`
+	} `json:"status"`
+	Name string `json:"name"`
+}
+
+type LivepeerTask struct {
+	ID string `json:"id"`
+}
+
+type LivepeerResponse struct {
+	URL         string        `json:"url"`
+	TusEndpoint string        `json:"tusEndpoint"`
+	Asset       LivepeerAsset `json:"asset"`
+	Task        LivepeerTask  `json:"task"`
+}
+
+type UploadVideoResponse struct {
+	Url string
+}
+
 // UploadVideo creates a one-time tokenized URL that can be used to upload larger video files using the tus protocol.
 // The client uses the Location header in the response from this function to upload the file.
 // The client uses the Stream-Media-Id header in the response from cloudflare to understand how to access the file for streaming.
 // See Cloudflare documentation here: https://developers.cloudflare.com/stream/uploading-videos/direct-creator-uploads#using-tus-recommended-for-videos-over-200mb
 func (fes *APIServer) UploadVideo(ww http.ResponseWriter, req *http.Request) {
-	if fes.Config.CloudflareStreamToken == "" || fes.Config.CloudflareAccountId == "" {
+	if fes.Config.LivepeerToken == "" {
 		_AddBadRequestError(ww, fmt.Sprintf("UploadVideo: This node is not configured to support video uploads"))
 		return
 	}
-	uploadLengthStr := req.Header.Get("Upload-Length")
-	if uploadLengthStr == "" {
-		_AddBadRequestError(ww, fmt.Sprintf("UploadVideo: Must provide Upload-Length header"))
-		return
-	}
-	uploadLength, err := strconv.Atoi(uploadLengthStr)
-	if err != nil {
-		_AddBadRequestError(ww, fmt.Sprintf("UploadVideo: Unable to convert Upload-Length header to int for validation: %v", err))
-		return
-	}
-	if uploadLength > 4*1024*1024*1024 {
-		_AddBadRequestError(ww, fmt.Sprintf("UploadVideo: Files must be less than 4GB"))
-		return
-	}
-	url := fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%v/stream?direct_user=true", fes.Config.CloudflareAccountId)
+	//uploadLengthStr := req.Header.Get("Upload-Length")
+	//if uploadLengthStr == "" {
+	//	_AddBadRequestError(ww, fmt.Sprintf("UploadVideo: Must provide Upload-Length header"))
+	//	return
+	//}
+	//uploadLength, err := strconv.Atoi(uploadLengthStr)
+	//if err != nil {
+	//	_AddBadRequestError(ww, fmt.Sprintf("UploadVideo: Unable to convert Upload-Length header to int for validation: %v", err))
+	//	return
+	//}
+	//if uploadLength > 4*1024*1024*1024 {
+	//	_AddBadRequestError(ww, fmt.Sprintf("UploadVideo: Files must be less than 4GB"))
+	//	return
+	//}
+	//url := fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%v/stream?direct_user=true", fes.Config.CloudflareAccountId)
+	url := fmt.Sprintf("https://livepeer.studio/api/asset/request-upload")
 	client := &http.Client{}
 
+	body := `{"name": "deso upload"}`
+
 	// Create the request and set relevant headers
-	request, err := http.NewRequest("POST", url, nil)
+	request, err := http.NewRequest("POST", url, bytes.NewBuffer([]byte(body)))
 	// Set Cloudflare token
-	request.Header.Add("Authorization", fmt.Sprintf("Bearer %v", fes.Config.CloudflareStreamToken))
+	request.Header.Set("Authorization", fmt.Sprintf("Bearer %v", fes.Config.LivepeerToken))
 	request.Header.Add("Tus-Resumable", "1.0.0")
 	// Tells Cloudflare expected file size in bytes
 	request.Header.Add("Upload-Length", req.Header.Get("Upload-Length"))
 	// Upload-Metadata options are described here: https://developers.cloudflare.com/stream/uploading-videos/upload-video-file#supported-options-in-upload-metadata
 	request.Header.Add("Upload-Metadata", req.Header.Get("Upload-Metadata"))
+	request.Header.Set("Content-Type", "application/json")
 	// Perform the request
 	resp, err := client.Do(request)
 	if err != nil {
@@ -331,14 +362,37 @@ func (fes *APIServer) UploadVideo(ww http.ResponseWriter, req *http.Request) {
 			"UploadVideo: error performing POST request: %v", err))
 		return
 	}
-	if resp.StatusCode != 201 {
+	if resp.StatusCode != 200 {
 		_AddBadRequestError(ww, fmt.Sprintf("UploadVideo: POST request did not return 201 status code but instead a status code of %v", resp.StatusCode))
 		return
 	}
+	// Read the response body
+	respBody, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		_AddBadRequestError(ww, fmt.Sprintf("UploadVideo: Error reading response body %v", err))
+		return
+	}
+
+	// Unmarshal the response body into a struct
+	var response LivepeerResponse
+	err = json.Unmarshal(respBody, &response)
+	if err != nil {
+		_AddBadRequestError(ww, fmt.Sprintf("UploadVideo: Error unmarshalling response body %v", err))
+		return
+	}
+
+	res := UploadVideoResponse{
+		Url: response.TusEndpoint,
+	}
+	if err = json.NewEncoder(ww).Encode(res); err != nil {
+		_AddBadRequestError(ww, fmt.Sprintf("UploadVideo: Problem encoding response as JSON: %v", err))
+		return
+	}
+
 	// Allow Location and Stream-Media-Id headers so these headers can be used on the client size
 	ww.Header().Add("Access-Control-Expose-Headers", "Location, Stream-Media-Id")
 	// The Location header specifies the one-time tokenized URL
-	ww.Header().Add("Location", resp.Header.Get("Location"))
+	ww.Header().Add("Location", response.TusEndpoint)
 	if ww.Header().Get("Access-Control-Allow-Origin") != "" {
 		ww.Header().Set("Access-Control-Allow-Origin", "*")
 	}
@@ -346,6 +400,10 @@ func (fes *APIServer) UploadVideo(ww http.ResponseWriter, req *http.Request) {
 		ww.Header().Set("Access-Control-Allow-Headers", "*")
 	}
 	ww.WriteHeader(200)
+}
+
+func (fes *APIServer) UploadVideoPatch(ww http.ResponseWriter, req *http.Request) {
+	fmt.Printf("\n\nHere's the patch\n\n")
 }
 
 type CFVideoDetailsResponse struct {
